@@ -1,0 +1,332 @@
+นาย ณภัทร ละอองเอี่ยม 680112418030
+
+VM2
+หน้าต่างนี้ยังดาวน์โหลดไม่ได้
+สมาชิกในกลุ่ม
++ เพิ่มสมาชิก
+นาย ณภัทร ละอองเอี่ยม
+680112418030
+×
+Data Communication — Lab Worksheet
+รู้จักเครื่องของตัวเองผ่าน SSH
+แบบฝึกหัดภาคปฏิบัติ 4 ส่วน: พื้นฐาน Linux, การสื่อสารเครือข่าย, ความปลอดภัย และรูปแบบ client–server — ทำบน VM ส่วนตัวของนักศึกษาแต่ละคนบนเครื่อง bru-rdi
+
+User	Host	Port
+labman1	10.10.180.13	2201
+labman2	10.10.180.13	2202
+labman3	10.10.180.13	2203
+labman4	10.10.180.13	2204
+labman5	10.10.180.13	2205
+เป้าหมายของ lab นี้
+อ่านและอธิบายผลลัพธ์จากคำสั่งตรวจสอบระบบและเครือข่ายพื้นฐานของ Linux ได้
+อธิบายเส้นทางของแพ็กเก็ตจาก VM ของตัวเองออกไปอินเทอร์เน็ต (private address → NAT → gateway)
+เปิด/ปิดพอร์ตด้วย firewall (ufw) และอธิบายผลที่เกิดขึ้นกับการเชื่อมต่อ
+สร้างและเรียกใช้บริการ client–server อย่างง่าย พร้อมโยงกับการ SSH เข้ามาเองว่าใช้หลักการเดียวกัน (port forwarding)
+ส่วนที่ 1
+พื้นฐานระบบ Linux
+เริ่มจากรู้จักตัวตนของเครื่องที่เพิ่งต่อเข้ามา — ใครกำลังใช้งาน เครื่องชื่ออะไร รันระบบปฏิบัติการรุ่นไหน และมีพื้นที่เก็บข้อมูลเท่าไร
+
+1.1
+ตัวตนของผู้ใช้และเครื่อง
+รันคำสั่งด้านล่าง เพื่อยืนยันว่ากำลังอยู่ใน VM ของตัวเอง ไม่ใช่เครื่องแม่ (host) แล้ววางผลลัพธ์ทั้งหมดที่ได้
+
+labman?@vm1
+$ whoami && hostname
+copy
+labman2
+vm1
+1.2
+รุ่นระบบปฏิบัติการและ kernel
+เช็ค distro และเวอร์ชัน kernel ที่กำลังรันอยู่
+
+labman?@vm1
+$ cat /etc/os-release | head -3 && uname -r
+copy
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+5.15.0-190-generic
+1.3
+สิทธิ์ผู้ใช้และพื้นที่ดิสก์
+ตรวจสอบ group ที่ตัวเองสังกัด และพื้นที่ดิสก์ที่เหลือใช้ได้บน root filesystem
+
+labman?@vm1
+$ id && df -h /
+copy
+uid=1000(labman2) gid=1000(labman2) groups=1000(labman2)
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda1        15G  2.2G   13G  16% /
+คำถาม: ทำไม id ถึงไม่แสดง group sudo แต่ตอนหลัง (ส่วนที่ 3) เราจะเรียก sudo ได้แบบไม่ถามรหัสผ่าน? เดาเหตุผลไว้ก่อน แล้วย้อนมาตรวจคำตอบทีหลัง
+เครื่องถูกตั้งค่า sudo privilege ผ่านไฟล์สิทธิ์ใน /etc/sudoers หรือ /etc/sudoers.d/ โดยเจาะจงให้ผู้ใช้ labman2 (หรือกฎแบบ %labman2 ALL=(ALL) NOPASSWD: ALL) สามารถรันคำสั่งด้วยสิทธิ์ root ได้โดยตรง โดยไม่จำเป็นต้องสังกัดกลุ่ม sudo และตั้งค่า NOPASSWD: ไว้ ทำให้ไม่ต้องกรอกรหัสผ่าน
+ส่วนที่ 2
+การสื่อสารเครือข่าย
+VM ของแต่ละคนอยู่หลัง NAT ส่วนตัว (คนละวงเครือข่ายภายใน แม้จะเห็นตัวเลข IP เดียวกัน) เราจะตามรอยแพ็กเก็ตตั้งแต่ interface ของตัวเอง ไปจนถึงปลายทางบนอินเทอร์เน็ต
+
+2.1
+Interface และ IP address ของตัวเอง
+ดู network interface ที่มีอยู่ และ IPv4 address ที่ได้รับ
+
+labman?@vm1
+$ ip -4 addr show
+copy
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+2: enp0s3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
+    inet 10.0.2.15/24 metric 100 brd 10.0.2.255 scope global dynamic enp0s3
+       valid_lft 63089sec preferred_lft 63089sec
+คำถาม: เทียบผลลัพธ์กับเพื่อนที่ใช้ labman คนอื่น — IP ที่ได้เหมือนหรือต่างกัน? ถ้าเหมือนกัน ทำไมจึงไม่ชนกัน?
+IP ที่ได้จะเหมือนกัน (เช่น 10.0.2.15/24) เพราะ VM แต่ละเครื่องทำงานอยู่บน Virtual Network (SLIRP NAT / Isolated Private Network) ของตัวเองที่แยกออกจากกันโดยสิ้นเชิง ทำให้ต่างคนต่างมีวง LAN ส่วนตัว ข้อมูลจึงไม่ปะปนหรือชนกันในระดับ Layer 2/3 ภายใน
+2.2
+เส้นทางออกอินเทอร์เน็ต (default route)
+ดู routing table เพื่อหา default gateway ที่แพ็กเก็ตทุกใบที่ไม่รู้ปลายทางจะถูกส่งไปก่อน
+
+labman?@vm1
+$ ip route
+copy
+default via 10.0.2.2 dev enp0s3 proto dhcp src 10.0.2.15 metric 100 
+10.0.2.0/24 dev enp0s3 proto kernel scope link src 10.0.2.15 metric 100 
+10.0.2.2 dev enp0s3 proto dhcp scope link src 10.0.2.15 metric 100 
+10.0.2.3 dev enp0s3 proto dhcp scope link src 10.0.2.15 metric 100
+คำถาม: gateway ที่เห็นคืออุปกรณ์ router จริงหรือไม่? คิดว่ามันคืออะไร
+ไม่ใช่อุปกรณ์ Hardware Router จริง แต่เป็น Virtual Router / Virtual Gateway (10.0.2.2) ที่จำลองขึ้นโดย Hypervisor (QEMU/KVM SLIRP Stack) บนเครื่องแม่ (host) เพื่อทำหน้าที่เป็น NAT Gateway ในการส่งแพ็กเก็ตออกสู่ภายนอก
+2.3
+ทดสอบการเชื่อมต่อด้วย ICMP
+ทดสอบว่าปลายทางตอบกลับหรือไม่ ด้วยเลข IP ตรง ๆ ก่อน แล้วค่อยด้วยชื่อโดเมน
+
+labman?@vm1
+$ ping -c 3 8.8.8.8
+$ ping -c 3 google.com
+copy
+PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.
+64 bytes from 8.8.8.8: icmp_seq=1 ttl=255 time=8.87 ms
+64 bytes from 8.8.8.8: icmp_seq=2 ttl=255 time=7.14 ms
+64 bytes from 8.8.8.8: icmp_seq=3 ttl=255 time=7.29 ms
+
+--- 8.8.8.8 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2003ms
+rtt min/avg/max/mdev = 7.136/7.765/8.874/0.786 ms
+PING google.com (74.125.24.138) 56(84) bytes of data.
+64 bytes from sf-in-f138.1e100.net (74.125.24.138): icmp_seq=1 ttl=255 time=30.9 ms
+64 bytes from sf-in-f138.1e100.net (74.125.24.138): icmp_seq=2 ttl=255 time=30.2 ms
+64 bytes from sf-in-f138.1e100.net (74.125.24.138): icmp_seq=3 ttl=255 time=31.0 ms
+
+--- google.com ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2003ms
+rtt min/avg/max/mdev = 30.225/30.718/31.007/0.350 ms
+คำถาม: คำสั่งที่สองต้องทำงานเพิ่มอีกหนึ่งขั้นตอนก่อนจะ ping ได้ ซึ่งคำสั่งแรกไม่ต้องทำ — ขั้นตอนนั้นคืออะไร และเกี่ยวข้องกับ protocol ชื่ออะไร?
+ขั้นตอนนั้นคือ Domain Name Resolution (การแปลงชื่อโดเมน google.com ให้เป็น IP Address 74.125.24.138) ซึ่งเกี่ยวข้องกับโปรโตคอล DNS (Domain Name System)
+2.4
+Domain Name Resolution
+ก่อน query จริง ดูก่อนว่าเครื่องนี้ตั้งค่าให้ถาม DNS server ตัวไหนอยู่
+
+labman?@vm1
+$ resolvectl status
+copy
+Global
+       Protocols: -LLMNR -mDNS -DNSOverTLS DNSSEC=no/unsupported
+resolv.conf mode: stub
+
+Link 2 (enp0s3)
+    Current Scopes: DNS
+         Protocols: +DefaultRoute +LLMNR -mDNS -DNSOverTLS DNSSEC=no/unsupported
+Current DNS Server: 10.0.2.3
+       DNS Servers: 10.0.2.3
+คำถาม: DNS server ที่เห็น (บรรทัด Current DNS Server) คือ IP เดียวกับ default gateway ในข้อ 2.2 หรือไม่? ถ้าไม่ใช่ ต่างกันอย่างไร และทำหน้าที่ต่างกันตรงไหน — แก้ผังเส้นทางแพ็กเก็ตของคุณจากข้อ 2.2 ให้เพิ่มจุด DNS server แยกออกมาให้ถูกต้อง
+ไม่ใช่ IP เดียวกันDefault Gateway (10.0.2.2): ทำหน้าที่ส่งผ่าน/ส่งต่อแพ็กเก็ตข้อมูล (Routing/NAT) ออกไปต่างวงเครือข่ายหรืออินเทอร์เน็ตDNS Server (10.0.2.3): ทำหน้าที่ตอบคำถามและแปลงชื่อโดเมน (Hostname) เป็น IP Address เท่านั้นผังเส้นทาง: [VM: 10.0.2.15] $\rightarrow$ ถามชื่อโดเมนไปที่ [DNS Server: 10.0.2.3] $\rightarrow$ ส่งแพ็กเก็ตข้อมูลออกอินเทอร์เน็ตผ่าน [Gateway: 10.0.2.2] $\rightarrow$ [Internet]
+2.4b
+ทดสอบ DNS query จริง
+ใช้ dig เพื่อดูขั้นตอน DNS resolution ที่เกิดขึ้นเบื้องหลังก่อนคำสั่ง ping ในข้อ 2.3 จะทำงานได้
+
+ลองเอง
+$ dig google.com
+copy
+; <<>> DiG 9.18.39-0ubuntu0.22.04.6-Ubuntu <<>> google.com
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 6910
+;; flags: qr rd ra; QUERY: 1, ANSWER: 6, AUTHORITY: 0, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 65494
+;; QUESTION SECTION:
+;google.com.                    IN      A
+
+;; ANSWER SECTION:
+google.com.             104     IN      A       74.125.24.138
+google.com.             104     IN      A       74.125.24.101
+google.com.             104     IN      A       74.125.24.100
+google.com.             104     IN      A       74.125.24.113
+google.com.             104     IN      A       74.125.24.102
+google.com.             104     IN      A       74.125.24.139
+
+;; Query time: 0 msec
+;; SERVER: 127.0.0.53#53(127.0.0.53) (UDP)
+;; WHEN: Mon Sep 14 07:09:06 UTC 2026
+;; MSG SIZE  rcvd: 135
+คำถาม: หา section ANSWER — IP ที่ได้ตรงกับที่ ping google.com ใช้ในข้อ 2.3 หรือไม่? บันทึก Query time เทียบกับ RTT ของ ping แล้วดูว่า SERVER ที่ dig ติดต่อ (ท้ายผลลัพธ์) ตรงกับ DNS server ที่เห็นในข้อ 2.4 หรือไม่
+IP Address: ตรงกัน (74.125.24.138 อยู่ในรายการ ANSWER section)
+
+Query time vs RTT: Query time ของ dig เท่ากับ 0 msec (เนื่องจากเป็นการถามไปยัง Local Stub Resolver /systemd-resolved ที่มี cache) ขณะที่ RTT ของ ping อยู่ที่ประมาณ 30.2 - 31.0 ms
+
+SERVER: ตัว dig ติดต่อหา 127.0.0.53#53 (Local Stub Resolver บนตัวเครื่อง) ซึ่งทำหน้าที่รับคำสั่งแล้วส่งต่อไปยัง DNS Server จริง (10.0.2.3) ที่ระบุในข้อ 2.4 อีกที
+2.5
+Socket ที่กำลังเปิดรอรับการเชื่อมต่อ
+ดูว่ามี service อะไรกำลัง listen บนพอร์ตไหนบ้างในเครื่องนี้
+
+labman?@vm1
+$ ss -tuln
+copy
+Netid      State       Recv-Q      Send-Q              Local Address:Port           Peer Address:Port     Process     
+udp        UNCONN      0           0                   127.0.0.53%lo:53                  0.0.0.0:*                    
+udp        UNCONN      0           0                10.0.2.15%enp0s3:68                  0.0.0.0:*                    
+tcp        LISTEN      0           128                       0.0.0.0:22                  0.0.0.0:*                    
+tcp        LISTEN      0           4096                127.0.0.53%lo:53                  0.0.0.0:*                    
+tcp        LISTEN      0           128                          [::]:22                     [::]:*    
+คำถาม: พอร์ต 22 และพอร์ต 53 ที่เห็น เกี่ยวข้องกับสิ่งที่คุณกำลังทำอยู่ตอนนี้อย่างไรบ้าง?
+Port 22 (SSH): เป็นพอร์ตที่ SSH Daemon (sshd) เปิดรับการเชื่อมต่อ เพื่อให้เรา Remote เข้ามาใช้งาน Terminal ของ VM เครื่องนี้
+
+Port 53 (DNS): เป็นพอร์ตที่ systemd-resolved เปิดเพื่อให้บริการแปลงชื่อโดเมนแก่แอปพลิเคชันภายในเครื่อง
+สรุปส่วนที่ 2
+
+วาดเส้นทางแพ็กเก็ตจาก VM → gateway → อินเทอร์เน็ต ลงกระดาษ พร้อมกำกับ IP ทุกจุด
+
+อธิบายได้ว่าทำไม VM ทุกตัวมี IP ภายในซ้ำกันแต่ไม่ชนกัน
+ส่วนที่ 3
+ความปลอดภัยเบื้องต้น
+การเชื่อมต่อของคุณเข้ามาที่ VM นี้ ใช้กลไกความปลอดภัยอยู่แล้วโดยไม่รู้ตัว — มาดูกันว่ามันทำงานอย่างไร แล้วลองเปิด/ปิด firewall เอง
+
+3.1
+บริการที่คุณกำลังใช้อยู่ตอนนี้
+ตรวจสอบสถานะของ SSH daemon ที่กำลังให้บริการ session ปัจจุบันอยู่
+
+labman?@vm1
+$ systemctl status ssh --no-pager
+copy
+● ssh.service - OpenBSD Secure Shell server
+     Loaded: loaded (/lib/systemd/system/ssh.service; enabled; vendor preset: enabled)
+     Active: active (running) since Mon 2026-09-14 06:48:45 UTC; 31min ago
+       Docs: man:sshd(8)
+             man:sshd_config(5)
+   Main PID: 7800 (sshd)
+      Tasks: 1 (limit: 2307)
+     Memory: 1.7M
+        CPU: 28ms
+     CGroup: /system.slice/ssh.service
+             └─7800 "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups"
+คำถาม: คุณเชื่อมต่อเข้ามาได้โดยไม่ใส่รหัสผ่านเลย — อธิบายกลไกที่ทำให้เป็นแบบนั้น (คำใบ้: ดูที่ ~/.ssh/)
+ใช้กลไก SSH Key-based Authentication โดย Public Key ของผู้ใช้ถูกคัดลอกไปวางไว้ในไฟล์ ~/.ssh/authorized_keys ของ VM เรียบร้อยแล้ว เมื่อทำการต่อเข้ามา SSH Agent จะใช้ Private Key ในการยืนยันตัวตนด้วย Cryptographic Handshake แทนการใช้ Password
+3.2
+สิทธิ์ผู้ดูแลระบบ (sudo)
+เรียกสิทธิ์ root ผ่าน sudo — สังเกตว่ามีการถามรหัสผ่านหรือไม่
+
+labman?@vm1
+$ sudo whoami
+copy
+root
+คำถาม: VM นี้ตั้งค่าไม่ให้ถามรหัสตอน sudo เพื่อความสะดวก — ถ้าเป็นเครื่อง production จริง ความเสี่ยงของการตั้งค่าแบบนี้คืออะไร และควรแก้ด้วยวิธีไหน?
+ความเสี่ยง: หากผู้ไม่หวังดีหรือมัลแวร์เข้าถึงบัญชีผู้ใช้ได้ จะสามารถยึดสิทธิ์สูงสุด (Root) ของเครื่องได้ทันทีโดยไม่มีการยืนยันตัวตนซ้ำ
+
+วิธีแก้ไข: ยกเลิกตัวเลือก NOPASSWD ในไฟล์ /etc/sudoers เพื่อบังคับให้ต้องกรอกรหัสผ่านของผู้ใช้ก่อนรัน sudo เสมอ และปฏิบัติตามหลัก Principle of Least Privilege
+3.3
+เปิดใช้งาน firewall ของตัวเอง
+เปิด ufw พร้อมอนุญาตเฉพาะพอร์ต SSH ก่อนเปิดโหมด deny-by-default — ลำดับสำคัญมาก ถ้าเปิด enable ก่อน allow อาจล็อกตัวเองออกจาก session ปัจจุบัน
+
+ลองเอง
+$ sudo ufw allow OpenSSH
+$ sudo ufw enable
+$ sudo ufw status verbose
+copy
+Rules updated
+Rules updated (v6)
+Command may disrupt existing ssh connections. Proceed with operation (y|n)? 
+คำถาม: เปิด terminal อีกแท็บ (session ใหม่) — ยังต่อได้ปกติไหม? แล้วลอง sudo ufw deny 22/tcp จากนั้นเปิด session ใหม่อีกครั้ง เกิดอะไรขึ้น บันทึกสิ่งที่สังเกตได้ (session เดิมที่เปิดค้างจะยังไม่หลุดทันที เพราะเป็น connection ที่ established ไปแล้ว — ทำไมถึงเป็นแบบนั้น)
+session ใหม่: ไม่สามารถต่อได้ Connection จะ Time out หรือ ถูก Reject
+
+เหตุผลที่ Session เดิมไม่หลุด: Firewall Rule ของ Linux (iptables/nftables) ทำงานแบบ Stateful Inspection โดยยอมรับแพ็กเก็ตที่เป็น ESTABLISHED หรือ RELATED (การเชื่อมต่อที่สถาปนาสำเร็จไปก่อนหน้าแล้ว) คำสั่ง deny จึงมีผลบล็อกเฉพาะการพยายามสร้างการเชื่อมต่อใหม่ (NEW) เท่านั้น
+3.4
+ตรวจสอบการเข้ารหัสของ HTTPS
+ดู response header ของเว็บที่ใช้ TLS เพื่อยืนยันว่าการเชื่อมต่อถูกเข้ารหัส
+
+labman?@vm1
+$ curl -sI https://www.google.com
+copy
+HTTP/2 200 
+content-type: text/html; charset=ISO-8859-1
+content-security-policy-report-only: object-src 'none';base-uri 'self';script-src 'nonce-oMGOwclNFfgNs6HPdo4YUw' 'strict-dynamic' 'report-sample' 'unsafe-eval' 'unsafe-inline' https: http:;report-uri https://csp.withgoogle.com/csp/gws/other-hp
+accept-ch: Sec-CH-Prefers-Color-Scheme
+p3p: CP="This is not a P3P policy! See g.co/p3phelp for more info."
+date: Mon, 14 Sep 2026 07:29:20 GMT
+server: gws
+x-xss-protection: 0
+x-frame-options: SAMEORIGIN
+expires: Mon, 14 Sep 2026 07:29:20 GMT
+cache-control: private
+set-cookie: __Secure-STRP=ANmZwa3XgoOdGmxJkjCd7-hzytGi32lLzs_MJM2SMkLqFd3LAjFmhZpLkxdjngUBUTFm40x5jCfGFub1rLKFveyyKdmoQ2t33yM0; expires=Mon, 14-Sep-2026 07:34:20 GMT; path=/; domain=.google.com; Secure; SameSite=strict
+set-cookie: AEC=AdJVEau5YEHA0vKFAGYv7zERordXqbB7dDjuw4gsCWipOFyX8AukGfjJqQ; expires=Sat, 13-Mar-2027 07:29:20 GMT; path=/; domain=.google.com; Secure; HttpOnly; SameSite=lax
+set-cookie: NID=CvgBCAESqgEBp2sxrqqvI73x5KNJ3St8Ue7ymcaRlMEzr6w7ZtFeRoYh0rL6_kWgHEP-nWL60ryaKJtwoYLCWCF09ql71iNoIh86hAYysIxKyvXIhUABQtlb-lR8ozrtAWeZosuuubEgojpPgdYcKftpY9gj63_JoDumpdOewm3h8otQ9Br90nLtWahdxwCxXVRtxfdNRlBS9nJZokK71Mlh-kAS4-NLRyJ30lXg_4PkyigBMkUBDiveEV6UjsSQyEh947a_coJgg_qP1M1ZsiltCUmakvkmYiCD42XeIkHNgxJLdQuf6n6vthrryC9dvNKcNv_YTIp82Aw; expires=Tue, 16-Mar-2027 07:29:20 GMT; path=/; domain=.google.com; HttpOnly
+alt-svc: h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+คำถาม: เทียบกับ SSH ที่คุณใช้เชื่อมต่ออยู่ตอนนี้ ทั้งคู่เข้ารหัสข้อมูล แต่ต่างกันอย่างไรในแง่ protocol และวิธี handshake?
+SSH: ทำงานบน Application Layer โดยตรง ผ่าน SSH Transport Layer Protocol ใช้ Public/Private Key pair (หรือ authorized_keys) ในการยืนยันตัวตนของทั้ง Server และ Client
+
+HTTPS (TLS/SSL): เป็นการซ้อน HTTP บน TLS Handshake ใช้ Digital Certificate ที่ออกโดย Certificate Authority (CA) เพื่อยืนยันตัวตนฝั่ง Server (และตรวจสอบผ่าน PKI Chain)
+ส่วนที่ 4
+Client–Server และ Port Forwarding
+ปิดท้ายด้วยการสร้าง server ของตัวเอง แล้วย้อนกลับมาดูว่าการที่คุณ SSH เข้ามาได้ตั้งแต่ต้น lab นี้ ก็ใช้หลักการ "แปลพอร์ต" แบบเดียวกัน
+
+4.1
+ตั้ง HTTP server ของตัวเอง
+เปิด web server ง่าย ๆ ด้วย Python built-in module แล้วเรียกดูจากเครื่องเดียวกัน
+
+labman?@vm1
+$ echo "lab: hello from $(whoami)" > index.html
+$ python3 -m http.server 8000 &
+$ curl -s localhost:8000
+copy
+[1] 13770
+10.30.99.8 - - [14/Sep/2026 07:35:23] "GET / HTTP/1.1" 200 -
+10.30.99.8 - - [14/Sep/2026 07:35:23] code 404, message File not found
+10.30.99.8 - - [14/Sep/2026 07:35:23] "GET /favicon.ico HTTP/1.1" 404 -
+10.30.99.8 - - [14/Sep/2026 07:37:39] "GET / HTTP/1.1" 304 -
+127.0.0.1 - - [14/Sep/2026 07:40:53] "GET / HTTP/1.1" 200 -
+lab: hello from labman2
+คำถาม: ในผลลัพธ์ฝั่ง server (access log) มีข้อมูลอะไรบ้าง (method, path, protocol, status code)? ระบุแต่ละส่วนจากบรรทัด log ที่ได้
+จากบรรทัด log "GET / HTTP/1.1" 200 -
+
+Method: GET
+
+Path: /
+
+Protocol: HTTP/1.1
+
+Status Code: 200 (Success)
+4.1b
+เปิดให้เข้าถึงจากภายนอกจริง
+ระหว่างที่ python3 -m http.server 8000 ในข้อ 4.1 ยังรันอยู่ เครื่องแม่ (bru-rdi) ได้ forward พอร์ต 8000 ของ VM คุณออกสู่อินเทอร์เน็ตแล้ว ที่พอร์ต 300 ต่อท้ายด้วยเลขท้าย username ของคุณ (เช่น labman3 → 3003, labman5 → 3005) เปิด http://202.29.14.232:300X/ (แทน X ด้วยเลขของคุณ) จากอุปกรณ์ที่ไม่ได้อยู่ในวง network เดียวกับห้องเรียน (เช่น สลับมือถือไปใช้ 4G/5G)
+
+คำถาม: เข้าถึงได้จริงหรือไม่? ระบุ URL เต็มที่ใช้ทดสอบ และอธิบายว่าทำไม IP ที่ใช้ตอนนี้ (202.29.14.232) ถึงต่างจาก IP ที่ใช้ตอน SSH ตั้งแต่ต้น lab (10.10.180.13) ทั้งที่เป็นเครื่องเดียวกัน
+URL ที่ใช้ทดสอบ: [http://202.29.14.232:3002/](http://202.29.14.232:3002/) (สำหรับ labman2)
+
+เหตุผลที่ IP ต่างกัน: 10.10.180.13 เป็น Private IP ที่เข้าถึงได้เฉพาะจากภายในวงเครือข่ายของห้องเรียน/สถาบัน ส่วน 202.29.14.232 เป็น Public IP ที่เครื่องแม่ (Host) หรือ Router ตัวนอกใช้ในการเชื่อมต่อออกสู่อินเทอร์เน็ตภายนอก (4G/5G)
+4.2
+ย้อนดูว่าตัวเองเข้ามาได้ยังไง
+เทียบสิ่งที่เพิ่งทำในข้อ 4.1-4.1b กับวิธีที่คุณเชื่อมต่อเข้ามาตั้งแต่ต้น lab
+
+คำถาม: ตอนนี้เครื่องแม่มี port forwarding คู่ขนานกันอยู่ 2 คู่ (host 220X → guest 22 สำหรับ SSH, host 300X → guest 8000 สำหรับ HTTP) อธิบายว่าทั้งสองคู่ใช้กลไกเดียวกันอย่างไร และถ้ามี labman คนที่ 6 เข้ามาอยากเปิด web server ของตัวเองบ้าง เครื่องแม่ต้องเตรียมอะไรเพิ่ม (คำใบ้: พอร์ต 8000 ฝั่ง guest ของทุกคนซ้ำกันได้ไหม เพราะอะไร แล้วพอร์ตฝั่ง host ล่ะ ซ้ำกันได้หรือไม่) วาดแผนภาพประกอบคำตอบ
+กลไก: ใช้ DNAT / Port Forwarding บนเครื่องแม่ โดยเครื่องแม่จะคอยดักจับ traffic ที่เข้ามาตาม Port ฝั่ง Host แล้ว Map/Forward แพ็กเก็ตไปยัง IP และ Port ฝั่ง Guest VMกรณี labman6:Port ฝั่ง Guest: ซ้ำกันได้ (ใช้ Port 8000 เหมือนกันได้) เพราะ Guest แต่ละตัวมี Network Namespace และ IP Address แยกกัน (10.0.2.15 ของตนเอง)Port ฝั่ง Host: ซ้ำกันไม่ได้ เครื่องแม่จะต้องเปิดและ Map พอร์ตใหม่ฝั่ง Host เพิ่มเติม เช่น Bind พอร์ต 2206 $\rightarrow$ VM6:22 (สำหรับ SSH) และ พอร์ต 3006 $\rightarrow$ VM6:8000 (สำหรับ HTTP)
+ส่งงาน
+
+Diagram เส้นทางแพ็กเก็ต (ส่วนที่ 2)
+
+คำตอบข้อ 3.2 และ 3.3 (firewall + sudo)
+
+Screenshot การเข้าเว็บจากมือถือ (4G/5G) ในข้อ 4.1b
+
+Diagram ตารางแปลพอร์ตข้อ 4.2 (SSH + HTTP คู่ขนานกัน)
+
+Screenshot ผลลัพธ์คำสั่ง dig google.com จากข้อ 2.4b
+Data Communication — VM Lab Worksheet
+bru-rdi · qemu:///session · SLIRP NAT per VM
+หน้าต่างนี้ยังดาวน์โหลดไม่ได้
+ดาวน์โหลดไฟล์แล้วส่งผ่านช่องทางส่งงานของวิชา (เช่น Google Classroom / LMS / อีเมล)
+ดาวน์โหลดไฟล์คำตอบ
